@@ -655,6 +655,39 @@ void ElfFile<ElfFileParamNames>::writeReplacedSections(Elf_Off & curOff,
         curOff += roundUp(i.second.size(), sectionAlignment);
     }
 
+    for (auto& i: replacedSections) {
+      const std::string & sectionName = i.first;
+      auto & shdr = findSectionHeader(sectionName);
+      if (rdi(shdr.sh_flags) & SHF_ALLOC) {
+        bool loaded = false;
+        for (auto& phdr: phdrs) {
+          if (rdi(phdr.p_type) == PT_LOAD &&
+              rdi(phdr.p_offset) <= rdi(shdr.sh_offset) &&
+              rdi(shdr.sh_size) <= rdi(phdr.p_filesz)) {
+            debug("'%s' section is loaded\n", sectionName.c_str());
+            loaded = true;
+            break;
+          }
+        }
+        if (!loaded) {
+          debug("'%s' was moved out of a load segment.\n", sectionName.c_str());
+          for (auto& phdr: phdrs) {
+            if (rdi(phdr.p_type) == PT_LOAD &&
+                rdi(shdr.sh_offset) < rdi(phdr.p_offset)) {
+              Elf64_Xword gap = rdi(phdr.p_offset) - rdi(shdr.sh_offset);
+              debug("grow PT_LOAD segment by 0x%x to cover '%s'\n",
+                gap, sectionName.c_str());
+              wri(phdr.p_filesz, rdi(phdr.p_filesz) + gap);
+              wri(phdr.p_memsz, rdi(phdr.p_memsz) + gap);
+              phdr.p_vaddr = phdr.p_paddr = shdr.sh_addr;
+              phdr.p_offset = shdr.sh_offset;
+              break;
+            }
+          }
+        }
+      }
+    }
+
     replacedSections.clear();
 }
 
